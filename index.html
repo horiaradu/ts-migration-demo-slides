@@ -56,7 +56,7 @@
         <li>Try <code>node src/index.ts</code> — watch it break</li>
         <li>Fix errors one by one (6 errors, 6 fixes)</li>
         <li>Update tooling (tsconfig, Vitest, Docker)</li>
-        <li>Lessons learned from a 600+ file codebase</li>
+        <li>Lessons learned from a ~700 file codebase</li>
     </ol>
 </section>
 
@@ -106,7 +106,7 @@
     <h2>Hidden helper: tsx</h2>
     <p><code>tsx</code> = drop-in replacement for <code>ts-node</code></p>
     <ul>
-        <li>Uses esbuild under the hood — <strong>much faster</strong></li>
+        <li>Uses esbuild under the hood — startup: <strong>~12s → ~6s</strong></li>
         <li>ESM support works out of the box</li>
         <li>Just runs the code — no type checking</li>
         <li>Bare imports (<code>from "./models"</code>) just work</li>
@@ -344,13 +344,13 @@ CMD ["node", "src/index.ts"]</code></pre>
 
 <!-- ========== LESSONS ========== -->
 <section>
-    <h2>Lessons from 600+ files</h2>
+    <h2>Lessons from ~700 files</h2>
     <ul>
         <li><strong>Circular deps are the hard part</strong> — everything else is mechanical</li>
-        <li>A regex script handled ~4500 imports for extensions</li>
+        <li>A regex script handled ~4700 imports for extensions</li>
         <li><code>import type</code> isn't just good practice — it's required for CJS packages in ESM</li>
         <li>No ESM config exists to auto-resolve <code>.ts</code> extensions — you must be explicit</li>
-        <li>We did it in 3 PRs on a 600+ file production codebase:
+        <li>We did it in 3 PRs on a ~700 file production codebase:
             <ol class="small">
                 <li>Extract model associations (break circular deps)</li>
                 <li>Migrate Jest → Vitest (adopt ESM)</li>
@@ -367,7 +367,7 @@ CMD ["node", "src/index.ts"]</code></pre>
         <li>🗑️ No build step</li>
         <li>🗑️ No ts-node / tsx</li>
         <li>🗑️ No source maps to debug</li>
-        <li>🔥 Faster startup</li>
+        <li>🔥 Faster startup (~3s)</li>
         <li>🐳 Simpler Docker images</li>
         <li>✅ Native Node — zero runtime dependencies for TS</li>
     </ul>
