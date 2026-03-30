@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Migrating to Native TypeScript Execution</title>
+    <link rel="stylesheet" href="node_modules/reveal.js/dist/reveal.css" />
+    <link rel="stylesheet" href="node_modules/reveal.js/dist/theme/dracula.css" />
+    <link rel="stylesheet" href="node_modules/reveal.js/dist/plugin/highlight/monokai.css" />
+    <style>
+        .reveal h1, .reveal h2, .reveal h3 { text-transform: none; }
+        .reveal pre { width: 100%; font-size: 0.55em; }
+        .reveal code { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+        .reveal .error-box {
+            background: rgba(255, 85, 85, 0.15);
+            border-left: 4px solid #ff5555;
+            padding: 0.5em 1em;
+            text-align: left;
+            font-family: monospace;
+            font-size: 0.7em;
+            margin: 0.5em 0;
+        }
+        .reveal .success-box {
+            background: rgba(80, 250, 123, 0.15);
+            border-left: 4px solid #50fa7b;
+            padding: 0.5em 1em;
+            text-align: left;
+            font-family: monospace;
+            font-size: 0.7em;
+            margin: 0.5em 0;
+        }
+        .reveal .dim { opacity: 0.4; }
+        .reveal .small { font-size: 0.7em; }
+        .reveal ul { text-align: left; }
+        .reveal .two-col { display: flex; gap: 1em; }
+        .reveal .two-col > * { flex: 1; }
+        .reveal .emoji { font-size: 1.5em; }
+    </style>
+</head>
+<body>
+<div class="reveal">
+<div class="slides">
+
+<!-- ========== TITLE ========== -->
+<section>
+    <h1>🚀 Migrating to Native<br/>TypeScript Execution</h1>
+    <h3>No build step. No ts-node. Just <code>node file.ts</code></h3>
+    <p class="small">Node 24 &middot; A step-by-step walkthrough</p>
+</section>
+
+<!-- ========== AGENDA ========== -->
+<section>
+    <h2>Agenda</h2>
+    <ol>
+        <li>The starting point — a typical TS project</li>
+        <li>Try <code>node src/index.ts</code> — watch it break</li>
+        <li>Fix errors one by one (6 errors, 6 fixes)</li>
+        <li>Update tooling (tsconfig, Vitest, Docker)</li>
+        <li>Lessons learned from a 600+ file codebase</li>
+    </ol>
+</section>
+
+<!-- ========== WHAT CHANGED IN NODE ========== -->
+<section>
+    <h2>What changed in Node?</h2>
+    <ul>
+        <li><strong>Node 22.6</strong> — <code>--experimental-strip-types</code></li>
+        <li><strong>Node 23.6</strong> — Type stripping enabled by default</li>
+        <li><strong>Node 24</strong> — Stable, no flags needed</li>
+    </ul>
+    <br/><br/>
+    <p>Node <em>erases</em> type annotations and runs the JS that's left.<br/>
+    No transpilation. No emit. Just strip and execute.</p>
+</section>
+
+<!-- ========== TYPE STRIPPING LIMITATIONS ========== -->
+<section>
+    <h2>What it can't strip</h2>
+    <p>Anything that generates <strong>runtime code</strong>:</p>
+    <ul>
+        <li><code>enum</code> declarations</li>
+        <li>Constructor parameter properties</li>
+        <li>Legacy <code>import x = require()</code></li>
+    </ul>
+    <br/><br/>
+    <p class="small">These aren't "erasable" — they change the output JS.</p>
+</section>
+
+<!-- ========== THE STARTING PROJECT ========== -->
+<section>
+    <h2>The starting project</h2>
+    <ul>
+        <li>Express + Sequelize + SQLite</li>
+        <li>Mixed <code>.ts</code> and <code>.js</code> files</li>
+        <li>CommonJS (<code>require</code> / <code>module.exports</code>)</li>
+        <li>TypeScript enums</li>
+        <li>Circular model dependencies (User ↔ Post ↔ Comment)</li>
+        <li><code>ts-node</code> for development, <code>tsc</code> build for production</li>
+        <li>Jest + ts-jest for tests</li>
+        <li><code>dist/</code> → multi-stage Dockerfile</li>
+    </ul>
+</section>
+
+<!-- ========== TSX ========== -->
+<section>
+    <h2>Hidden helper: tsx</h2>
+    <p><code>tsx</code> = drop-in replacement for <code>ts-node</code></p>
+    <ul>
+        <li>Uses esbuild under the hood — <strong>much faster</strong></li>
+        <li>ESM support works out of the box</li>
+        <li>Just runs the code — no type checking</li>
+        <li>Bare imports (<code>from "./models"</code>) just work</li>
+    </ul>
+    <br/>
+    <p class="fragment">Great quick win. But still a runtime dependency.<br/>
+    Native execution means <strong>zero extra tooling</strong>.</p>
+</section>
+
+<!-- ========== CIRCULAR DEPS DIAGRAM ========== -->
+<section>
+    <h2>The circular dependency problem</h2>
+    <pre><code class="language-text">
+  User.ts ──imports──▶ Post.ts
+    │                    │
+    │                    ▼
+    └──imports──▶ Comment.ts ◀──imports── Post.ts
+    </code></pre>
+    <p>Each model imports the others to define associations.<br/>
+    Works in CJS (<code>require</code> returns partial module).<br/>
+    <strong>Breaks in ESM</strong> (temporal dead zone).</p>
+</section>
+
+<!-- ========== LET'S TRY IT ========== -->
+<section>
+    <h2>Step 1: Just try it</h2>
+    <pre><code class="language-json">"start": "node src/index.ts"</code></pre>
+    <div class="error-box">
+        ERR_UNSUPPORTED_DIR_IMPORT<br/>
+        Directory import '.../src/models' is not supported
+    </div>
+    <p class="fragment">ESM requires explicit file extensions on imports.<br/>
+    <code>import from "./models"</code> → not allowed.</p>
+</section>
+
+<!-- ========== TYPE MODULE ========== -->
+<section>
+    <h2>Step 2: Add <code>"type": "module"</code></h2>
+    <p>Maybe we need to tell Node it's ESM?</p>
+    <div class="error-box">
+        ERR_UNSUPPORTED_DIR_IMPORT<br/>
+        <span class="small">(same error)</span>
+    </div>
+    <p class="fragment">Node already detected <code>import</code> syntax.<br/>
+    The problem is bare imports, not the module type.</p>
+</section>
+
+<!-- ========== ADD EXTENSIONS ========== -->
+<section>
+    <h2>Step 3: Add file extensions to imports</h2>
+    <pre><code class="language-typescript">// Before
+import { User } from "./models";
+import { Role } from "../types";
+
+// After
+import { User } from "./models/index.ts";
+import { Role } from "../types.ts";</code></pre>
+    <div class="error-box">
+        ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX<br/>
+        TypeScript enum declaration is not supported
+    </div>
+</section>
+
+<!-- ========== ENUMS ========== -->
+<section>
+    <h2>Step 4: Convert enums to <code>as const</code></h2>
+    <div class="two-col">
+        <div>
+            <p class="small"><strong>Before</strong></p>
+            <pre><code class="language-typescript">enum Role {
+  Admin = "admin",
+  User = "user",
+}</code></pre>
+        </div>
+        <div>
+            <p class="small"><strong>After</strong></p>
+            <pre><code class="language-typescript">const Role = {
+  Admin: "admin",
+  User: "user",
+} as const;
+
+type Role =
+  (typeof Role)[keyof typeof Role];</code></pre>
+        </div>
+    </div>
+    <p class="fragment small"><code>Role.Admin</code> still works. Types still infer correctly.</p>
+    <div class="error-box fragment">
+        SyntaxError: 'sequelize' does not provide<br/>
+        an export named 'CreationOptional'
+    </div>
+</section>
+
+<!-- ========== IMPORT TYPE ========== -->
+<section>
+    <h2>Step 5: Split type-only imports</h2>
+    <pre><code class="language-typescript">// Before — all named imports together
+import { Model, DataTypes, CreationOptional } from "sequelize";
+
+// After — runtime values vs types
+import { Model, DataTypes } from "sequelize";
+import type { CreationOptional, ForeignKey } from "sequelize";</code></pre>
+    <p class="small">CJS packages can't provide TypeScript types as ESM exports at runtime.<br/>
+    <code>import type</code> is erased — it never reaches the module loader.</p>
+    <div class="error-box fragment">
+        ReferenceError: require is not defined in ES module scope
+    </div>
+</section>
+
+<!-- ========== REQUIRE TO IMPORT ========== -->
+<section>
+    <h2>Step 6: Replace <code>require()</code> with <code>import</code></h2>
+    <pre><code class="language-typescript">// Before
+const config = require("./config.js");
+
+// After
+import config from "./config.js";</code></pre>
+    <p>Also convert JS files from <code>module.exports</code> to ESM <code>export</code>.</p>
+    <div class="error-box fragment">
+        ReferenceError: Cannot access 'User' before initialization
+    </div>
+    <p class="fragment"><strong>The circular dependency TDZ crash.</strong></p>
+</section>
+
+<!-- ========== TDZ EXPLAINED ========== -->
+<section>
+    <h2>Why circular imports crash in ESM</h2>
+    <ul>
+        <li><strong>CJS</strong>: <code>require()</code> returns whatever's exported <em>so far</em>. Lazy.</li>
+        <li><strong>ESM</strong>: Imports are <em>live bindings</em> resolved at module instantiation.</li>
+    </ul>
+    <br/><br/>
+    <p>When <code>Comment.ts</code> imports <code>User</code> and <code>User.ts</code> hasn't finished
+    executing yet → <code>User</code> is in the <strong>temporal dead zone</strong>.</p>
+    <pre><code class="language-text">Comment.ts → User.ts → Post.ts → Comment.ts
+                                    ↑ still initializing!</code></pre>
+</section>
+
+<!-- ========== THE FIX: ASSOCIATIONS FILE ========== -->
+<section>
+    <h2>Step 7: Extract associations ✅</h2>
+    <pre><code class="language-typescript">// src/models/associations.ts
+import { User } from "./User.ts";
+import { Post } from "./Post.ts";
+import { Comment } from "./Comment.ts";
+
+User.hasMany(Post, { foreignKey: "userId", as: "posts" });
+Post.belongsTo(User, { foreignKey: "userId", as: "author" });
+User.hasMany(Comment, { foreignKey: "userId", as: "comments" });
+// ... all associations in one place</code></pre>
+    <p>Individual model files use <code>import type</code> for cross-model refs.<br/>
+    No circular <em>runtime</em> imports → no TDZ.</p>
+    <div class="success-box fragment">
+        ✅ Database synced<br/>
+        ✅ ts-migration-demo running on port 3000
+    </div>
+</section>
+
+<!-- ========== TSCONFIG ========== -->
+<section>
+    <h2>Step 8: Update tsconfig</h2>
+    <pre><code class="language-json">{
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true
+  }
+}</code></pre>
+    <ul class="small">
+        <li><code>noEmit</code> — tsc is now a type-checker only</li>
+        <li><code>allowImportingTsExtensions</code> — <code>.ts</code> in import paths OK</li>
+        <li><code>erasableSyntaxOnly</code> — catches non-strippable syntax</li>
+    </ul>
+    <div class="success-box fragment">npm run build passes clean.</div>
+</section>
+
+<!-- ========== VITEST ========== -->
+<section>
+    <h2>Step 9: Jest → Vitest</h2>
+    <p>Jest can't load <code>jest.config.js</code> in an ESM package.</p>
+    <pre><code class="language-bash">npm uninstall jest ts-jest @types/jest
+npm install -D vitest</code></pre>
+    <ul class="small">
+        <li>Delete <code>jest.config.js</code>, <code>tsconfig.test.json</code></li>
+        <li>Add <code>vitest.config.ts</code></li>
+        <li>Fix test imports (add <code>.ts</code> extensions)</li>
+    </ul>
+    <div class="success-box fragment">16/16 tests passing.</div>
+</section>
+
+<!-- ========== DOCKERFILE ========== -->
+<section>
+    <h2>Step 10: Simplify Dockerfile</h2>
+    <div class="two-col">
+        <div>
+            <p class="small"><strong>Before</strong></p>
+            <pre><code class="language-dockerfile">FROM node:24-slim AS build
+COPY . .
+RUN npm ci && npm run build
+
+FROM node:24-slim
+COPY --from=build /app/dist .
+CMD ["node", "dist/index.js"]</code></pre>
+        </div>
+        <div>
+            <p class="small"><strong>After</strong></p>
+            <pre><code class="language-dockerfile">FROM node:24-slim
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY src/ ./src/
+CMD ["node", "src/index.ts"]</code></pre>
+        </div>
+    </div>
+    <p class="fragment">No build stage. Ship source. Run directly.</p>
+</section>
+
+<!-- ========== SUMMARY ========== -->
+<section>
+    <h2>The migration in 10 steps</h2>
+    <ol class="small">
+        <li><code>node src/index.ts</code> → bare directory import error</li>
+        <li><code>"type": "module"</code> → same error</li>
+        <li>Add <code>.ts</code> extensions → enum error</li>
+        <li><code>as const</code> objects → CJS type export error</li>
+        <li><code>import type</code> → require not defined</li>
+        <li><code>import</code> + ESM exports → circular TDZ crash</li>
+        <li><strong>Extract associations → IT WORKS</strong></li>
+        <li>Update tsconfig → build passes</li>
+        <li>Jest → Vitest → tests pass</li>
+        <li>Simplify Dockerfile → ship it</li>
+    </ol>
+</section>
+
+<!-- ========== LESSONS ========== -->
+<section>
+    <h2>Lessons from 600+ files</h2>
+    <ul>
+        <li><strong>Circular deps are the hard part</strong> — everything else is mechanical</li>
+        <li>A regex script handled ~4500 imports for extensions</li>
+        <li><code>import type</code> isn't just good practice — it's required for CJS packages in ESM</li>
+        <li>No ESM config exists to auto-resolve <code>.ts</code> extensions — you must be explicit</li>
+        <li>We did it in 3 PRs on a 600+ file production codebase:
+            <ol class="small">
+                <li>Extract model associations (break circular deps)</li>
+                <li>Migrate Jest → Vitest (adopt ESM)</li>
+                <li>Execute TS directly (drop build step)</li>
+            </ol>
+        </li>
+    </ul>
+</section>
+
+<!-- ========== WHAT YOU GET ========== -->
+<section>
+    <h2>What you get</h2>
+    <ul>
+        <li>🗑️ No build step</li>
+        <li>🗑️ No ts-node / tsx</li>
+        <li>🗑️ No source maps to debug</li>
+        <li>🔥 Faster startup</li>
+        <li>🐳 Simpler Docker images</li>
+        <li>✅ Native Node — zero runtime dependencies for TS</li>
+    </ul>
+</section>
+
+<!-- ========== THANK YOU ========== -->
+<section>
+    <h1>Thanks!</h1>
+    <p>Code: <a href="https://github.com/horiaradu/ts-migration-demo">github.com/horiaradu/ts-migration-demo</a></p>
+    <p class="small">Every step is a commit. Walk through the git log.</p>
+</section>
+
+</div>
+</div>
+
+<script src="node_modules/reveal.js/dist/reveal.js"></script>
+<script src="node_modules/reveal.js/dist/plugin/highlight.js"></script>
+<script>
+    Reveal.initialize({
+        hash: true,
+        slideNumber: true,
+        plugins: [RevealHighlight],
+    });
+</script>
+</body>
+</html>
