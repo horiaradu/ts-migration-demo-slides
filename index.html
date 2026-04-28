@@ -134,7 +134,7 @@
 <section>
     <h2>Step 1: Just try it</h2>
     <pre><code class="language-json">"start": "node src/index.ts"</code></pre>
-    <div class="error-box">
+    <div class="error-box fragment">
         ERR_UNSUPPORTED_DIR_IMPORT<br/>
         Directory import '.../src/models' is not supported
     </div>
@@ -146,7 +146,7 @@
 <section>
     <h2>Step 2: Add <code>"type": "module"</code></h2>
     <p>Maybe we need to tell Node it's ESM?</p>
-    <div class="error-box">
+    <div class="error-box fragment">
         ERR_UNSUPPORTED_DIR_IMPORT<br/>
         <span class="small">(same error)</span>
     </div>
@@ -164,7 +164,7 @@ import { Role } from "../types";
 // After
 import { User } from "./models/index.ts";
 import { Role } from "../types.ts";</code></pre>
-    <div class="error-box">
+    <div class="error-box fragment">
         ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX<br/>
         TypeScript enum declaration is not supported
     </div>
