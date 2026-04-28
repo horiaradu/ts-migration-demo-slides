@@ -29,6 +29,15 @@
             font-size: 0.7em;
             margin: 0.5em 0;
         }
+        .reveal .warning-box {
+            background: rgba(255, 184, 108, 0.15);
+            border-left: 4px solid #ffb86c;
+            padding: 0.5em 1em;
+            text-align: left;
+            font-family: monospace;
+            font-size: 0.7em;
+            margin: 0.5em 0;
+        }
         .reveal .dim { opacity: 0.4; }
         .reveal .small { font-size: 0.7em; }
         .reveal ul { text-align: left; }
@@ -94,7 +103,7 @@
         <li>Mixed <code>.ts</code> and <code>.js</code> files</li>
         <li>CommonJS (<code>require</code> / <code>module.exports</code>)</li>
         <li>TypeScript enums</li>
-        <li>Circular model dependencies (User ↔ Post ↔ Comment)</li>
+        <li>Import hoisting</li>
         <li><code>ts-node</code> for development, <code>tsc</code> build for production</li>
         <li>Jest + ts-jest for tests</li>
         <li><code>dist/</code> → multi-stage Dockerfile</li>
@@ -116,18 +125,19 @@
     Native execution means <strong>zero extra tooling</strong>.</p>
 </section>
 
-<!-- ========== CIRCULAR DEPS DIAGRAM ========== -->
+<!-- ========== IMPORT HOISTING ========== -->
 <section>
-    <h2>The circular dependency problem</h2>
-    <pre><code class="language-text">
-  User.ts ──imports──▶ Post.ts
-    │                    │
-    │                    ▼
-    └──imports──▶ Comment.ts ◀──imports── Post.ts
-    </code></pre>
-    <p>Each model imports the others to define associations.<br/>
-    Works in CJS (<code>require</code> returns partial module).<br/>
-    <strong>Breaks in ESM</strong> (temporal dead zone).</p>
+    <h2>The import hoisting trap</h2>
+    <p class="small"><strong>What you write</strong></p>
+    <pre><code class="language-typescript">process.env.DB_PATH = ":memory:";
+
+import config from "./config.js";</code></pre>
+    <p class="small"><strong>What ESM executes</strong></p>
+    <pre><code class="language-typescript">import config from "./config.js";
+
+process.env.DB_PATH = ":memory:";  // too late!</code></pre>
+    <p class="fragment">ESM hoists all <code>import</code> declarations.<br/>
+    <code>config.js</code> loads <em>before</em> <code>DB_PATH</code> is set → wrong value.</p>
 </section>
 
 <!-- ========== LET'S TRY IT ========== -->
@@ -224,29 +234,41 @@ const config = require("./config.js");
 // After
 import config from "./config.js";</code></pre>
     <p>Also convert JS files from <code>module.exports</code> to ESM <code>export</code>.</p>
-    <div class="error-box fragment">
-        ReferenceError: Cannot access 'User' before initialization
+    <div class="warning-box fragment">
+        [config] DB_PATH at load time: (not set, using :memory:)
     </div>
-    <p class="fragment"><strong>The circular dependency TDZ crash.</strong></p>
+    <p class="fragment"><strong>Import hoisting changed the execution order.</strong></p>
 </section>
 
-<!-- ========== TDZ EXPLAINED ========== -->
+<!-- ========== HOISTING EXPLAINED ========== -->
 <section>
-    <h2>Why circular imports crash in ESM</h2>
+    <h2>Why import hoisting breaks things</h2>
     <ul>
-        <li><strong>CJS</strong>: <code>require()</code> returns whatever's exported <em>so far</em>. Lazy.</li>
-        <li><strong>ESM</strong>: Imports are <em>live bindings</em> resolved at module instantiation.</li>
+        <li><strong>CJS</strong>: <code>require()</code> runs inline, top to bottom</li>
+        <li><strong>ESM</strong>: <code>import</code> is hoisted above all executable code</li>
     </ul>
-    <br/><br/>
-    <p>When <code>Comment.ts</code> imports <code>User</code> and <code>User.ts</code> hasn't finished
-    executing yet → <code>User</code> is in the <strong>temporal dead zone</strong>.</p>
-    <pre><code class="language-text">Comment.ts → User.ts → Post.ts → Comment.ts
-                                    ↑ still initializing!</code></pre>
+    <br/>
+    <p>Anything that must run <em>before</em> imports is silently broken:<br/>
+    env setup, error handlers, <code>dotenv.config()</code></p>
+    <p class="fragment"><strong>Fix:</strong> Move setup to a side-effect import:<br/>
+    <code>import "./setup.ts";</code> — hoisted too, but evaluated first.</p>
 </section>
 
-<!-- ========== THE FIX: ASSOCIATIONS FILE ========== -->
+<!-- ========== ESM PITFALLS INTRO ========== -->
 <section>
-    <h2>Step 7: Extract associations ✅</h2>
+    <h2>⚠️ ESM pitfalls to watch for</h2>
+    <ul>
+        <li>Circular model imports</li>
+        <li>Module-level initialization</li>
+        <li>Temporal Dead Zone</li>
+    </ul>
+</section>
+
+<!-- ========== PITFALL: CIRCULAR MODEL IMPORTS ========== -->
+<section>
+    <h2>⚠️ Circular model imports</h2>
+    <p>Associations that reference other models cause TDZ errors.</p>
+    <p><strong>Fix:</strong> Extract to a central file:</p>
     <pre><code class="language-typescript">// src/models/associations.ts
 import { User } from "./User.ts";
 import { Post } from "./Post.ts";
@@ -254,19 +276,46 @@ import { Comment } from "./Comment.ts";
 
 User.hasMany(Post, { foreignKey: "userId", as: "posts" });
 Post.belongsTo(User, { foreignKey: "userId", as: "author" });
-User.hasMany(Comment, { foreignKey: "userId", as: "comments" });
-// ... all associations in one place</code></pre>
-    <p>Individual model files use <code>import type</code> for cross-model refs.<br/>
+User.hasMany(Comment, { foreignKey: "userId", as: "comments" });</code></pre>
+    <p class="small">Individual model files use <code>import type</code> for cross-model refs.<br/>
     No circular <em>runtime</em> imports → no TDZ.</p>
-    <div class="success-box fragment">
-        ✅ Database synced<br/>
-        ✅ ts-migration-demo running on port 3000
-    </div>
+</section>
+
+<!-- ========== PITFALL: MODULE-LEVEL INIT ========== -->
+<section>
+    <h2>⚠️ Module-level initialization</h2>
+    <p>Top-level code runs during import resolution,<br/>
+    <em>before</em> your entry point code executes.</p>
+    <pre><code class="language-typescript">// User.ts — runs as soon as User.ts is imported
+User.init(
+    { name: { type: DataTypes.STRING } },
+    { sequelize, modelName: "User" }
+);
+
+// If sequelize isn't ready yet → crash</code></pre>
+    <p class="fragment"><strong>Fix:</strong> Ensure dependencies like the DB connection<br/>
+    are initialized in a module imported <em>before</em> the models.</p>
+</section>
+
+<!-- ========== PITFALL: TDZ ========== -->
+<section>
+    <h2>⚠️ Temporal Dead Zone</h2>
+    <p>ESM bindings exist but are uninitialized until<br/>
+    the module body runs.</p>
+    <pre><code class="language-typescript">// Comment.ts
+import { User } from "./User.ts";
+
+// If User.ts hasn't finished executing:
+User.hasMany(Comment, { foreignKey: "userId" });
+//   ↑ ReferenceError: Cannot access 'User'
+//     before initialization</code></pre>
+    <p class="fragment">CJS returns <code>undefined</code> for unfinished exports.<br/>
+    ESM throws a <code>ReferenceError</code> — fail loud, fail early.</p>
 </section>
 
 <!-- ========== TSCONFIG ========== -->
 <section>
-    <h2>Step 8: Update tsconfig</h2>
+    <h2>Step 7: Update tsconfig</h2>
     <pre><code class="language-json">{
   "compilerOptions": {
     "module": "nodenext",
@@ -286,7 +335,7 @@ User.hasMany(Comment, { foreignKey: "userId", as: "comments" });
 
 <!-- ========== VITEST ========== -->
 <section>
-    <h2>Step 9: Jest → Vitest</h2>
+    <h2>Step 8: Jest → Vitest</h2>
     <p>Jest can't load <code>jest.config.js</code> in an ESM package.</p>
     <pre><code class="language-bash">npm uninstall jest ts-jest @types/jest
 npm install -D vitest</code></pre>
@@ -300,7 +349,7 @@ npm install -D vitest</code></pre>
 
 <!-- ========== DOCKERFILE ========== -->
 <section>
-    <h2>Step 10: Simplify Dockerfile</h2>
+    <h2>Step 9: Simplify Dockerfile</h2>
     <div class="two-col">
         <div>
             <p class="small"><strong>Before</strong></p>
@@ -327,15 +376,14 @@ CMD ["node", "src/index.ts"]</code></pre>
 
 <!-- ========== SUMMARY ========== -->
 <section>
-    <h2>The migration in 10 steps</h2>
+    <h2>The migration in 9 steps</h2>
     <ol class="small">
         <li><code>node src/index.ts</code> → bare directory import error</li>
         <li><code>"type": "module"</code> → same error</li>
         <li>Add <code>.ts</code> extensions → enum error</li>
         <li><code>as const</code> objects → CJS type export error</li>
         <li><code>import type</code> → require not defined</li>
-        <li><code>import</code> + ESM exports → circular TDZ crash</li>
-        <li><strong>Extract associations → IT WORKS</strong></li>
+        <li><code>import</code> + ESM exports → import hoisting breaks env setup</li>
         <li>Update tsconfig → build passes</li>
         <li>Jest → Vitest → tests pass</li>
         <li>Simplify Dockerfile → ship it</li>
@@ -346,7 +394,7 @@ CMD ["node", "src/index.ts"]</code></pre>
 <section>
     <h2>Lessons from ~700 files</h2>
     <ul>
-        <li><strong>Circular deps are the hard part</strong> — everything else is mechanical</li>
+        <li><strong>Import hoisting is the hard part</strong> — everything else is mechanical</li>
         <li>A regex script handled ~4700 imports for extensions</li>
         <li><code>import type</code> isn't just good practice — it's required for CJS packages in ESM</li>
         <li>No ESM config exists to auto-resolve <code>.ts</code> extensions — you must be explicit</li>
