@@ -350,13 +350,6 @@ CMD ["node", "src/index.ts"]</code></pre>
         <li>A regex script handled ~4700 imports for extensions</li>
         <li><code>import type</code> isn't just good practice — it's required for CJS packages in ESM</li>
         <li>No ESM config exists to auto-resolve <code>.ts</code> extensions — you must be explicit</li>
-        <li>We did it in 3 PRs on a ~700 file production codebase:
-            <ol class="small">
-                <li>Extract model associations (break circular deps)</li>
-                <li>Migrate Jest → Vitest (adopt ESM)</li>
-                <li>Execute TS directly (drop build step)</li>
-            </ol>
-        </li>
     </ul>
 </section>
 
